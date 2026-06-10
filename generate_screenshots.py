@@ -7,6 +7,36 @@ Output: docs/screen_*.png  (640×344, 2× native resolution)
 import math, os
 from PIL import Image, ImageDraw, ImageFont
 
+# ── 1-bit glyph bitmaps decoded from cjk_glyphs.h / welcome_glyphs.h ─────────
+# Each glyph is 32×32 pixels, 4 bytes per row, MSB = leftmost pixel.
+
+GLYPH_W = GLYPH_H = 32  # "创意开发"
+GLYPHS_DATA = [
+    [0,0,0,0,0,0,0,0,0,16,0,120,0,60,0,48,0,56,0,48,0,124,0,48,0,127,15,48,0,231,134,48,1,193,230,48,3,128,230,48,7,128,70,48,15,0,6,48,15,255,134,48,5,255,134,48,1,129,134,48,1,129,134,48,1,129,134,48,1,129,134,48,1,131,134,48,1,159,134,48,1,143,6,48,1,136,6,48,1,128,70,48,1,128,96,48,1,128,224,48,1,129,224,48,1,255,192,112,0,255,131,240,0,0,1,192,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,3,128,0,0,7,128,0,0,3,128,0,15,255,255,192,15,255,255,192,0,16,32,0,0,120,28,0,0,56,56,0,31,255,255,240,31,255,255,240,0,0,0,0,1,255,255,0,1,255,255,0,1,128,3,0,1,128,3,0,1,255,255,0,1,255,255,0,1,128,3,0,1,255,255,0,1,255,255,0,0,0,128,0,0,67,128,128,7,57,193,192,6,49,140,224,14,48,14,112,14,56,60,40,28,63,252,0,0,15,192,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,7,255,255,240,7,255,255,240,0,28,14,0,0,28,14,0,0,28,14,0,0,28,14,0,0,28,14,0,0,28,14,0,0,28,14,0,0,28,14,0,0,28,14,0,31,255,255,252,31,255,255,252,0,28,14,0,0,28,14,0,0,60,14,0,0,56,14,0,0,56,14,0,0,112,14,0,0,240,14,0,1,224,14,0,3,192,14,0,15,128,14,0,31,0,14,0,2,0,14,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,3,192,0,1,3,134,0,0,195,143,0,1,227,135,128,1,131,3,128,3,131,1,0,3,7,0,16,7,255,255,240,7,255,255,240,2,14,0,0,0,14,0,0,0,12,0,0,0,31,255,192,0,63,255,128,0,56,3,128,0,124,7,0,0,252,7,0,1,238,14,0,3,199,30,0,7,131,252,0,31,1,248,0,62,0,240,0,12,3,254,0,0,31,159,252,1,255,7,248,3,248,1,240,0,224,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+]
+
+WEL_W = WEL_H = 32  # "主人欢迎回来"
+WEL_DATA = [
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,1,128,0,0,3,128,0,0,3,192,0,0,1,224,0,0,1,128,0,0,0,0,0,7,255,255,224,7,255,255,224,0,3,128,0,0,3,128,0,0,3,128,0,0,3,128,0,0,3,128,0,0,3,128,0,3,255,255,128,3,255,255,128,0,3,128,0,0,3,128,0,0,3,128,0,0,3,128,0,0,3,128,0,0,3,128,0,0,3,128,0,0,3,128,0,31,255,255,240,31,255,255,240,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,3,192,0,0,3,192,0,0,3,192,0,0,3,128,0,0,3,128,0,0,3,128,0,0,3,128,0,0,3,128,0,0,3,128,0,0,3,192,0,0,7,192,0,0,7,192,0,0,6,224,0,0,14,96,0,0,12,112,0,0,28,112,0,0,56,56,0,0,120,28,0,0,112,30,0,0,224,15,128,3,224,7,192,7,192,3,240,31,0,1,252,62,0,0,112,12,0,0,48,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,96,0,0,0,112,0,0,0,224,0,0,0,224,0,31,248,224,0,31,248,255,248,0,56,255,240,0,57,192,112,0,49,128,112,12,51,128,96,14,51,156,96,7,119,28,128,3,225,28,0,1,224,28,0,1,224,28,0,0,224,28,0,1,224,28,0,1,240,62,0,3,184,54,0,3,152,115,0,7,28,115,128,7,8,227,192,14,1,193,240,28,3,192,248,8,15,128,112,0,30,0,48,0,4,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,2,1,128,0,15,7,128,0,7,15,223,240,3,140,31,240,3,140,24,48,2,12,24,48,0,12,24,48,31,204,24,48,31,140,24,48,3,140,24,48,3,12,24,48,7,12,24,48,6,12,24,48,14,12,24,48,31,204,88,48,15,204,216,48,1,143,217,240,1,159,153,240,1,158,24,192,3,136,24,0,3,0,24,0,7,128,24,0,15,240,0,0,30,255,255,252,60,31,255,248,8,0,255,240,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,4,0,0,32,7,255,255,224,7,255,255,224,6,0,0,224,6,0,0,224,6,0,0,224,6,31,248,224,6,31,248,224,6,24,24,224,6,24,24,224,6,24,24,224,6,24,24,224,6,24,24,224,6,24,24,224,6,31,248,224,6,31,248,224,6,0,0,224,6,0,0,224,6,0,0,224,6,0,0,224,7,255,255,224,7,255,255,224,6,0,0,224,6,0,0,224,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,1,224,0,0,1,192,0,0,1,192,0,0,1,192,0,7,255,255,240,7,255,255,240,0,1,192,0,0,1,195,0,0,193,195,192,1,225,199,0,0,241,199,0,0,97,206,0,0,1,196,0,31,255,255,248,31,255,255,248,0,13,240,0,0,29,216,0,0,57,216,0,0,49,204,0,0,241,207,0,1,225,199,128,3,193,195,224,15,129,193,252,63,1,192,248,12,1,192,48,0,1,192,16,0,1,192,0,0,0,0,0,0,0,0,0,0,0,0,0],
+]
+
+def draw_glyph(d, data, x, y, w, h, color, scale=1):
+    """Render a 1-bit GFX-format bitmap. MSB of each byte = leftmost pixel."""
+    bpr = (w + 7) // 8  # bytes per row
+    for row in range(h):
+        for col in range(w):
+            if data[row * bpr + col // 8] & (0x80 >> (col % 8)):
+                px, py = x + col * scale, y + row * scale
+                d.rectangle([px, py, px + scale - 1, py + scale - 1], fill=color)
+
 SCALE = 2
 W, H = 320 * SCALE, 172 * SCALE
 OUTDIR = os.path.join(os.path.dirname(__file__), "docs")
@@ -245,46 +275,56 @@ def screen_multi():
     bottom_bar(d, "5h 71%  ctx 22%")
     return img
 
-def screen_sleep():
-    """Mac display off — G badge + floating z's."""
-    img, d = new_canvas(NAVY)
-    cx, cy = s(84), s(84)
+def draw_badge(d, cx, cy):
+    """Gold G badge ring."""
     r = s(22)
     circle(d, cx, cy, r, GOLD)
     circle(d, cx, cy, r - s(3), NAVY)
     circle(d, cx, cy, r - s(6), GOLD)
     text(d, cx - s(9), cy - s(11), "G", NAVY, SZ3)
-    # faint "创意开发" placeholder glyphs (blocks, since we can't embed CJK bitmaps)
-    for i in range(4):
-        gx = s(118) + i * s(36)
-        gy = s(68)
-        d.rectangle([gx, gy, gx + s(28), gy + s(28)],
-                    outline=(55, 60, 105), width=max(1, s(1)))
-    # z's
-    for k, (ox, oy, sz) in enumerate([(s(26), -s(8), SZ2), (s(36), -s(18), SZ1), (s(42), -s(26), SZ1)]):
-        alpha = 210
-        text(d, cx + ox, cy + oy, "Z" if k == 0 else "z",
-             (alpha, alpha, 255), sz)
+
+def screen_sleep():
+    """Mac display off — G badge + dim glyphs + floating z's."""
+    img, d = new_canvas(NAVY)
+    cx, cy = s(84), s(84)
+    draw_badge(d, cx, cy)
+    dim = (55, 60, 105)
+    for i, gdata in enumerate(GLYPHS_DATA):
+        draw_glyph(d, gdata, s(118) + i * s(36), s(68), GLYPH_W, GLYPH_H, dim, scale=SCALE)
+    # floating Z's from badge
+    for k, (ox, oy, sz, ch) in enumerate([
+            (s(28),  -s(6),  SZ2, "Z"),
+            (s(38), -s(18),  SZ1, "z"),
+            (s(44), -s(28),  SZ1, "z"),
+    ]):
+        alpha = 210 - k * 30
+        text(d, cx + ox, cy + oy, ch, (alpha, alpha, 255), sz)
     return img
 
 def screen_boot():
-    """Splash — G badge slides left, typewriter glyphs."""
+    """Splash — G badge + typewriter 创意开发 (3 shown, cursor after 3rd)."""
     img, d = new_canvas(NAVY)
     cx, cy = s(84), s(84)
-    r = s(22)
-    circle(d, cx, cy, r, GOLD)
-    circle(d, cx, cy, r - s(3), NAVY)
-    circle(d, cx, cy, r - s(6), GOLD)
-    text(d, cx - s(9), cy - s(11), "G", NAVY, SZ3)
-    # "创意开发" as white blocks with cursor after last glyph
+    draw_badge(d, cx, cy)
+    # show 3 of 4 glyphs (mid-typewriter), cursor blinking after 3rd
+    for i in range(3):
+        draw_glyph(d, GLYPHS_DATA[i], s(118) + i * s(36), s(68), GLYPH_W, GLYPH_H, WHITE, scale=SCALE)
+    # cursor after 3rd glyph
+    cx3 = s(118) + 3 * s(36) - s(4)
+    d.rectangle([cx3, s(68) + s(24), cx3 + s(14), s(68) + s(27)], fill=GOLD)
+    return img
+
+def screen_welcome():
+    """Wake animation — 主人 / 欢迎回来 typewriter (all 6 shown)."""
+    img, d = new_canvas(NAVY)
+    # row 1: 主人 centered
+    r1x = (320 - 2 * WEL_W) // 2
+    for i in range(2):
+        draw_glyph(d, WEL_DATA[i], s(r1x) + i * s(WEL_W), s(46), WEL_W, WEL_H, GOLD, scale=SCALE)
+    # row 2: 欢迎回来 centered
+    r2x = (320 - 4 * WEL_W) // 2
     for i in range(4):
-        gx = s(118) + i * s(36)
-        gy = s(68)
-        d.rectangle([gx, gy, gx + s(28), gy + s(28)],
-                    outline=WHITE, fill=(40, 45, 90), width=max(1, s(1)))
-    # cursor after 4th glyph
-    cx4 = s(118) + 4 * s(36) - s(4)
-    d.rectangle([cx4, s(68) + s(24), cx4 + s(14), s(68) + s(27)], fill=GOLD)
+        draw_glyph(d, WEL_DATA[2 + i], s(r2x) + i * s(WEL_W), s(94), WEL_W, WEL_H, WHITE, scale=SCALE)
     return img
 
 # ── generate ──────────────────────────────────────────────────────────────────
@@ -294,7 +334,8 @@ SHOTS = [
     ("screen_done",     screen_done,     "Task finished — celebration"),
     ("screen_multi",    screen_multi,    "Multiple sessions — mini-pet grid"),
     ("screen_sleep",    screen_sleep,    "Mac display off — sleep mode"),
-    ("screen_boot",     screen_boot,     "Boot splash"),
+    ("screen_boot",     screen_boot,     "Boot splash (typewriter mid-animation)"),
+    ("screen_welcome",  screen_welcome,  "Wake animation — 主人欢迎回来"),
 ]
 
 for name, fn, desc in SHOTS:

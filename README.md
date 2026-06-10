@@ -17,7 +17,11 @@ An ESP32-C6 LCD gadget that shows real-time activity of your AI CLI tools — Cl
 | Boot splash | Mac display off |
 |:-----------:|:---------------:|
 | ![Boot](docs/screen_boot.png) | ![Sleep](docs/screen_sleep.png) |
-| G badge slides left, glyphs typewrite in | Hub sends sleep packet, Z's float up |
+| G badge slides left, 创意开发 typewriters in | Hub sends sleep packet, Z's float up |
+
+| Wake animation | |
+|:--------------:|:-|
+| ![Welcome](docs/screen_welcome.png) | Screen wakes — 主人欢迎回来 typewriters in before dashboard resumes |
 
 The pet bobs and types while a session is running, celebrates with confetti when it finishes, and snores `z z z` when everything is idle.
 
