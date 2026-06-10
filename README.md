@@ -145,30 +145,32 @@ export CLI_HUB="http://192.168.x.x:8722"   # add to ~/.zshrc
 
 To start hub + forwarder automatically on login, create two LaunchAgents:
 
-**`~/Library/LaunchAgents/com.cli.hub.plist`**
+Replace `/path/to/cli-dashboard` with the actual directory where you cloned the repo.
+
+**`~/Library/LaunchAgents/com.cli-dashboard.hub.plist`**
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>Label</key><string>com.cli.hub</string>
+  <key>Label</key><string>com.cli-dashboard.hub</string>
   <key>ProgramArguments</key><array>
     <string>/usr/bin/python3</string>
-    <string>/Volumes/Mac/develop/cli_dashboard/mac_cli_hub.py</string>
+    <string>/path/to/cli-dashboard/mac_cli_hub.py</string>
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
 </dict></plist>
 ```
 
-**`~/Library/LaunchAgents/com.zeron.cliserial.plist`**
+**`~/Library/LaunchAgents/com.cli-dashboard.serial.plist`**
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>Label</key><string>com.zeron.cliserial</string>
+  <key>Label</key><string>com.cli-dashboard.serial</string>
   <key>ProgramArguments</key><array>
     <string>/usr/bin/python3</string>
-    <string>/Volumes/Mac/develop/cli_dashboard/mac_serial_forward.py</string>
+    <string>/path/to/cli-dashboard/mac_serial_forward.py</string>
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
@@ -178,8 +180,8 @@ To start hub + forwarder automatically on login, create two LaunchAgents:
 Load them:
 
 ```bash
-launchctl load -w ~/Library/LaunchAgents/com.cli.hub.plist
-launchctl load -w ~/Library/LaunchAgents/com.zeron.cliserial.plist
+launchctl load -w ~/Library/LaunchAgents/com.cli-dashboard.hub.plist
+launchctl load -w ~/Library/LaunchAgents/com.cli-dashboard.serial.plist
 ```
 
 ---

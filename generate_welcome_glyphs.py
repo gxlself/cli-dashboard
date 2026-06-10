@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Rasterize welcome message CJK glyphs into 1-bit bitmaps."""
+import os
 from PIL import Image, ImageDraw, ImageFont
 
 TEXT = "主人欢迎回来"
 FONT = "/System/Library/Fonts/STHeiti Medium.ttc"
 W = H = 32
 SIZE = 30
-OUT = "/Volumes/Mac/develop/cli_dashboard/welcome_glyphs.h"
+OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "welcome_glyphs.h")
 
 font = ImageFont.truetype(FONT, SIZE)
 blobs = []

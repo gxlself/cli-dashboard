@@ -149,7 +149,7 @@ if "$PYTHON" -c "import urllib.request; urllib.request.urlopen('${HUB_URL}/healt
   echo "    Hub reachable — all done!"
 else
   echo "    Hub not reachable yet (is mac_cli_hub.py running on ${HUB_IP}?)."
-  echo "    Run on the Mac:  python3 /Volumes/Mac/develop/cli_dashboard/mac_cli_hub.py"
+  echo "    Run on the Mac:  python3 /path/to/cli-dashboard/mac_cli_hub.py"
 fi
 
 echo ""

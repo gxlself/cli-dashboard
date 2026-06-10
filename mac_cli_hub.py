@@ -13,6 +13,7 @@ Endpoints
 Run:  python3 mac_cli_hub.py [port]      (default 8722)
 """
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -36,7 +37,7 @@ FLASH = 0               # global completion counter; device flashes LED when it 
 LAST_DONE_CLI = ""      # which channel most recently completed
 
 # persist usage strings so quota stays displayed when idle / across restarts
-PERSIST = "/Volumes/Mac/develop/cli_dashboard/.hub_usage.json"
+PERSIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hub_usage.json")
 
 
 def _save_usage():

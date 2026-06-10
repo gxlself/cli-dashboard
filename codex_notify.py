@@ -53,8 +53,16 @@ def codex_usage():
         return " | ".join(parts)
     except Exception:
         return ""
-# original notifier that was configured before we wrapped it
-ORIG = "/Users/gaoxiaolong/.codex/computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient"
+# original Codex computer-use notifier — forward the event so that integration keeps working.
+# set CODEX_NOTIFY_ORIG env var to override, or leave empty to skip the passthrough.
+ORIG = os.environ.get(
+    "CODEX_NOTIFY_ORIG",
+    os.path.expanduser(
+        "~/.codex/computer-use/Codex Computer Use.app"
+        "/Contents/SharedSupport/SkyComputerUseClient.app"
+        "/Contents/MacOS/SkyComputerUseClient"
+    ),
+)
 ORIG_LEADING_ARGS = ["turn-ended"]
 
 
