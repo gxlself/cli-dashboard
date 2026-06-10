@@ -2,17 +2,22 @@
 
 An ESP32-C6 LCD gadget that shows real-time activity of your AI CLI tools — Claude Code, Codex, Cursor, and Qoder — with an animated desk pet that reacts to what each tool is doing.
 
-```
-┌─────────────────────────────────────────┐
-│  Claude  ●          x2                  │
-│─────────────────────────────────────────│
-│                                         │
-│         (≧◡≦) typing...                │
-│                                         │
-│─────────────────────────────────────────│
-│  5h 57%  ctx 17%              ● ○ ○ ○  │
-└─────────────────────────────────────────┘
-```
+## Preview
+
+| Working | Idle |
+|:-------:|:----:|
+| ![Working](docs/screen_working.png) | ![Idle](docs/screen_idle.png) |
+| Session running — pet bobs and types | No active sessions — pet snores z z z |
+
+| Task finished | Multiple sessions |
+|:-------------:|:-----------------:|
+| ![Done](docs/screen_done.png) | ![Multi](docs/screen_multi.png) |
+| Full-screen celebration with confetti | Mini-pet grid, one per open session |
+
+| Boot splash | Mac display off |
+|:-----------:|:---------------:|
+| ![Boot](docs/screen_boot.png) | ![Sleep](docs/screen_sleep.png) |
+| G badge slides left, glyphs typewrite in | Hub sends sleep packet, Z's float up |
 
 The pet bobs and types while a session is running, celebrates with confetti when it finishes, and snores `z z z` when everything is idle.
 
