@@ -60,6 +60,7 @@ uint32_t lastData = 0;
 uint32_t animFrame = 0, lastAnim = 0;
 uint32_t celebrateUntil = 0;   // full-screen completion celebration window
 String doneCli = "";
+String doneCliId = "";
 bool isSleep = false;
 
 // serial line buffer
@@ -70,15 +71,38 @@ int blen = 0;
 bool ledActive = false;
 uint32_t ledStart = 0;
 const uint32_t LED_MS = 2600;
+uint8_t ledR = 0, ledG = 180, ledB = 40;
 
 static uint16_t statusColor(const String &s) {
   if (s == "running") return GREEN;
   if (s == "done") return YELLOW;
   return DARKGREY;
 }
+static uint16_t cliColor(const String &id) {
+  if (id == "claude") return MAGENTA;
+  if (id == "codex") return CYAN;
+  if (id == "cursor") return GREEN;
+  if (id == "qoder") return YELLOW;
+  return WHITE;
+}
+static void setLedColorForCli(const String &id) {
+  if (id == "claude")      { ledR = 150; ledG = 55;  ledB = 180; }
+  else if (id == "codex")  { ledR = 0;   ledG = 150; ledB = 190; }
+  else if (id == "cursor") { ledR = 40;  ledG = 180; ledB = 55;  }
+  else if (id == "qoder")  { ledR = 190; ledG = 135; ledB = 20;  }
+  else                     { ledR = 0;   ledG = 180; ledB = 40;  }
+}
 static String fit(const String &s, int maxChars) {
   if ((int)s.length() <= maxChars) return s;
   return s.substring(0, maxChars - 3) + "...";
+}
+static void centerText(const String &s, int y, int size, uint16_t color) {
+  gfx->setTextSize(size);
+  gfx->setTextColor(color);
+  int x = (W - (int)s.length() * 6 * size) / 2;
+  if (x < 0) x = 0;
+  gfx->setCursor(x, y);
+  gfx->print(s);
 }
 
 static void ledOff() { neopixelWrite(RGB_PIN, 0, 0, 0); }
@@ -88,7 +112,7 @@ static void ledTick() {
   if (e >= LED_MS) { ledActive = false; ledOff(); return; }
   float ph = (e / (float)LED_MS) * 2.0f * 2.0f * PI;
   float b = (1.0f - cosf(ph)) * 0.5f;
-  neopixelWrite(RGB_PIN, 0, (uint8_t)(b * 180), (uint8_t)(b * 40));
+  neopixelWrite(RGB_PIN, (uint8_t)(b * ledR), (uint8_t)(b * ledG), (uint8_t)(b * ledB));
 }
 
 static void drawChannelDots() {
@@ -183,12 +207,15 @@ static void drawMiniPet(int cx, int cy, const String &st, uint32_t f) {
 
 // full-screen completion celebration (shown briefly when any CLI finishes)
 static void drawCelebrate(uint32_t f) {
-  gfx->fillScreen(NAVY);
-  drawPet(W / 2, 70, "done", f);
-  gfx->setTextSize(3); gfx->setTextColor(YELLOW);
-  gfx->setCursor((W - 5 * 18) / 2, 116); gfx->print("DONE!");
-  gfx->setTextSize(2); gfx->setTextColor(WHITE);
-  gfx->setCursor((W - (int)doneCli.length() * 12) / 2, 148); gfx->print(doneCli);
+  uint16_t accent = cliColor(doneCliId);
+  String name = doneCli.length() ? doneCli : String("CLI");
+  name.toUpperCase();
+  gfx->fillScreen(RGB565(5, 9, 24));
+  gfx->fillRect(0, 0, W, 8, accent);
+  gfx->drawRoundRect(8, 14, W - 16, 42, 7, accent);
+  centerText(name, 24, 3, WHITE);
+  drawPet(W / 2, 92, "done", f);
+  centerText("DONE!", 136, 3, accent);
   gfx->flush();
 }
 
@@ -277,6 +304,7 @@ static void parseState(const char *body) {
   int flash = doc["flash"] | 0;
   const char *dc = doc["done_cli"] | "";
   String dcName = "";
+  int dcIdx = -1;
   int idx = 0;
   for (JsonObject ch : doc["channels"].as<JsonArray>()) {
     if (idx >= NUM) break;
@@ -297,16 +325,22 @@ static void parseState(const char *body) {
       const char *s = p.as<const char *>();
       c.pets[c.nPets++] = String(s ? s : "idle");
     }
-    if (dc[0] && strcmp((const char *)(ch["id"] | ""), dc) == 0) dcName = c.name;
+    if (dc[0] && strcmp((const char *)(ch["id"] | ""), dc) == 0) {
+      dcName = c.name;
+      dcIdx = idx;
+    }
     idx++;
   }
   haveData = true;
   lastData = millis();
   if (flashSeen < 0) flashSeen = flash;
   else if (flash > flashSeen) {
+    doneCliId = String(dc);
+    doneCli = dcName.length() ? dcName : String("CLI");
+    if (dcIdx >= 0) view = dcIdx;
+    setLedColorForCli(doneCliId);
     ledActive = true; ledStart = millis();
     celebrateUntil = millis() + 2200;
-    doneCli = dcName.length() ? dcName : String("CLI");
     flashSeen = flash;
   }
   if (wasSleeping) {

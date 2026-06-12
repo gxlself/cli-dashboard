@@ -12,6 +12,7 @@ Endpoints
 
 Run:  python3 mac_cli_hub.py [port]      (default 8722)
 """
+import glob
 import json
 import os
 import subprocess
@@ -29,6 +30,8 @@ CHANNELS = [("claude", "Claude"), ("codex", "Codex"),
 SESSION_TTL = 1800      # forget a session idle longer than this (s)
 DONE_WINDOW = 8         # seconds a channel stays "done" after a stop event
 WINDOW_FRESH = 300      # a session counts as an open window if seen within this (s)
+ACTIVE_CPU = {"claude": 2.0, "codex": 0.5}
+CODEX_ACTIVE_FILE_WINDOW = 90  # or from a recently-written session rollout
 
 LOCK = threading.Lock()
 # per-cli: sessions {sid: {title, running, ts}}, usage string, last_done ts
@@ -60,21 +63,46 @@ def _load_usage():
 
 # open-window counts from process scan (catches idle windows that don't post).
 PROC = {cid: 0 for cid, _ in CHANNELS}
+PROC_ACTIVE = {cid: 0 for cid, _ in CHANNELS}
 PROC_BASENAME = {"claude": "claude", "cursor": "cursor-agent", "codex": "codex"}
+
+
+def _codex_recent_active_files(now):
+    n = 0
+    try:
+        files = glob.glob(os.path.expanduser("~/.codex/sessions/**/*.jsonl"),
+                          recursive=True)
+        for path in files:
+            try:
+                if now - os.path.getmtime(path) > CODEX_ACTIVE_FILE_WINDOW:
+                    continue
+                last_type = ""
+                with open(path, errors="replace") as f:
+                    for line in f:
+                        if line.strip():
+                            last_type = (json.loads(line).get("payload") or {}).get("type", "")
+                if last_type != "task_complete":
+                    n += 1
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return n
 
 
 def scan_windows():
     try:
-        out = subprocess.run(["ps", "-axo", "tty=,command="],
+        out = subprocess.run(["ps", "-axo", "tty=,pcpu=,stat=,command="],
                              capture_output=True, text=True, timeout=5).stdout
     except Exception:
         return
     counts = {cid: 0 for cid, _ in CHANNELS}
+    active = {cid: 0 for cid, _ in CHANNELS}
     for line in out.splitlines():
-        p = line.strip().split(None, 1)
-        if len(p) < 2:
+        p = line.strip().split(None, 3)
+        if len(p) < 4:
             continue
-        tty, cmd = p[0], p[1]
+        tty, pcpu, stat, cmd = p
         # drop the desktop app, our own helpers, and codex computer-use noise
         if any(s in cmd for s in ("/Applications/", "cli_dashboard", "_hook",
                                   "_notify", "mac_cli_hub", "Computer Use",
@@ -89,8 +117,18 @@ def scan_windows():
             if cid == "codex" and tty == "??":
                 continue
             counts[cid] += 1
+            try:
+                cpu = float(pcpu)
+            except Exception:
+                cpu = 0.0
+            threshold = ACTIVE_CPU.get(cid)
+            if threshold is not None and (cpu >= threshold or "R" in stat):
+                active[cid] += 1
+    if counts.get("codex", 0):
+        active["codex"] = max(active["codex"], _codex_recent_active_files(time.time()))
     with LOCK:
         PROC.update(counts)
+        PROC_ACTIVE.update(active)
 
 
 def _scan_loop():
@@ -160,7 +198,9 @@ def build_state():
             live = sorted((v for v in sess.values() if now - v["ts"] < WINDOW_FRESH),
                           key=lambda v: -v["ts"])
             tasks = [v["title"] for v in live if v.get("title")][:5]
-            running = any(v["running"] for v in live)
+            wcount = max(PROC.get(cid, 0), len(live))
+            active = min(PROC_ACTIVE.get(cid, 0), wcount)
+            running = active > 0 or any(v["running"] for v in live)
             if running:
                 status = "running"
             elif now - st["last_done"] < DONE_WINDOW:
@@ -175,10 +215,12 @@ def build_state():
                 if v.get("running") or now - v.get("last_usage", 0) < 4:
                     return "running"
                 return "idle"
-            wcount = max(PROC.get(cid, 0), len(live))
             pets = [sstat(v) for v in live]          # one per known session
             while len(pets) < wcount:                # pad open-but-unhooked windows
                 pets.append("idle")
+            for i in range(active):                   # process activity inference
+                if i < len(pets) and pets[i] == "idle":
+                    pets[i] = "running"
             pets = pets[:8]
             chans.append({
                 "id": cid, "name": name,
