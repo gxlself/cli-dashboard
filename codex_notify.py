@@ -2,55 +2,45 @@
 """Codex notify -> CLI hub bridge (and pass-through to the existing notifier).
 
 Codex calls:  codex_notify.py <json-event>
-Codex fires notify on agent-turn-complete, so we treat it as a completion
-event for the Codex channel (sets task title + flashes the LED), then forward
-the same event to the original computer-use notifier so nothing breaks.
+The hub deduplicates this fallback with local rollout events using thread and
+turn IDs. Never synthesize a prompt or combine completions into one session.
 """
-import glob
 import json
 import os
+from pathlib import Path
 import subprocess
 import sys
 import urllib.request
+from codex_rollout import format_usage
 
-HUB = "http://127.0.0.1:8722/event"
+HUB = os.environ.get("CLI_HUB", "http://127.0.0.1:8722").rstrip("/") + "/event"
 
 
-def codex_usage():
-    """Parse the newest Codex session rollout for token usage + rate limits."""
+def codex_usage(session):
+    """Read only this thread's usage, never the newest unrelated transcript."""
     try:
-        files = glob.glob(os.path.expanduser("~/.codex/sessions/**/*.jsonl"), recursive=True)
+        if not session or any(ch not in "0123456789abcdef-" for ch in session.lower()):
+            return ""
+        home = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex")))
+        files = list((home / "sessions").rglob(f"rollout-*-{session}.jsonl"))
         if not files:
             return ""
-        newest = max(files, key=os.path.getmtime)
-        tot = prim = sec = None
-        with open(newest) as f:
-            for line in f:
-                if '"token_count"' not in line:
-                    continue
-                try:
-                    p = json.loads(line).get("payload", {})
-                except Exception:
-                    continue
-                info = p.get("info") or {}
-                if info.get("total_token_usage"):
-                    tot = info["total_token_usage"]
-                rl = p.get("rate_limits") or {}
-                if rl.get("primary"):
-                    prim = rl["primary"]
-                if rl.get("secondary"):
-                    sec = rl["secondary"]
-        parts = []
-        for label, win in (("5h", prim), ("wk", sec)):
-            if win:
-                pct = win.get("used_percent", win.get("used_percentage"))
-                if pct is not None:
-                    parts.append("%s %d%%" % (label, round(pct)))
-        if tot:
-            tk = (tot.get("input_tokens", 0) or 0) + (tot.get("output_tokens", 0) or 0)
-            if tk:
-                parts.append("%dk tok" % round(tk / 1000))
-        return " | ".join(parts)
+        path = max(files, key=lambda p: p.stat().st_mtime)
+        with path.open("rb") as stream:
+            stream.seek(max(0, path.stat().st_size - 1024 * 1024))
+            lines = stream.read().splitlines()
+        for line in reversed(lines):
+            try:
+                record = json.loads(line)
+            except (ValueError, UnicodeError):
+                continue
+            if not isinstance(record, dict):
+                continue
+            payload = record.get("payload")
+            if (record.get("type") == "event_msg" and isinstance(payload, dict)
+                    and payload.get("type") == "token_count"):
+                return format_usage(payload)
+        return ""
     except Exception:
         return ""
 # original Codex computer-use notifier — forward the event so that integration keeps working.
@@ -66,6 +56,23 @@ ORIG = os.environ.get(
 ORIG_LEADING_ARGS = ["turn-ended"]
 
 
+def completion_event(ev):
+    if not isinstance(ev, dict) or ev.get("type") != "agent-turn-complete":
+        return None
+    session = ev.get("thread-id") or ev.get("thread_id")
+    turn = ev.get("turn-id") or ev.get("turn_id")
+    if not isinstance(session, str) or not session:
+        return None
+    # Without a turn ID the lifecycle reader handles completion safely.
+    if not isinstance(turn, str) or not turn:
+        return None
+    stop = {"cli": "codex", "session": session, "turn": turn, "type": "stop"}
+    cwd = ev.get("cwd")
+    if isinstance(cwd, str) and cwd:
+        stop["title"] = Path(cwd).name[:60]
+    return stop
+
+
 def main():
     raw = sys.argv[1] if len(sys.argv) > 1 else "{}"
     try:
@@ -73,26 +80,17 @@ def main():
     except Exception:
         ev = {}
 
-    # Codex notify fires only on completion with no stable session id, so we use
-    # a single presence bucket (windows = 1 when recently active, prunes to 0).
-    session = "codex"
-    title = ""
-    msgs = ev.get("input-messages") or ev.get("input_messages") or []
-    if isinstance(msgs, list) and msgs:
-        title = str(msgs[-1]).strip().replace("\n", " ")[:60]
-
-    # agent-turn-complete -> register the task then mark done (flash)
-    if title:
-        _post({"cli": "codex", "session": session, "type": "prompt", "title": title})
-    stop = {"cli": "codex", "session": session, "type": "stop"}
-    usage = codex_usage()
-    if usage:
-        stop["usage"] = usage
-    _post(stop)
+    stop = completion_event(ev)
+    if stop:
+        usage = codex_usage(stop["session"])
+        if usage:
+            stop["usage"] = usage
+        _post(stop)
 
     # pass through to the original notifier (preserve computer-use)
     try:
-        subprocess.run([ORIG] + ORIG_LEADING_ARGS + [raw], timeout=10)
+        if ORIG:
+            subprocess.run([ORIG] + ORIG_LEADING_ARGS + [raw], timeout=10)
     except Exception:
         pass
     sys.exit(0)

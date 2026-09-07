@@ -1,5 +1,6 @@
 acli/
 .hub_usage.json
+.hub_focus.json
 __pycache__/
 *.pyc
 /tmp/

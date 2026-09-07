@@ -4,8 +4,9 @@
 Run:  python3 generate_screenshots.py
 Output: docs/screen_*.png  (640×344, 2× native resolution)
 """
-import math, os
-from PIL import Image, ImageDraw, ImageFont
+import math, os, re
+from pathlib import Path
+from PIL import Image, ImageDraw
 
 # ── 1-bit glyph bitmaps decoded from cjk_glyphs.h / welcome_glyphs.h ─────────
 # Each glyph is 32×32 pixels, 4 bytes per row, MSB = leftmost pixel.
@@ -37,7 +38,7 @@ def draw_glyph(d, data, x, y, w, h, color, scale=1):
                 px, py = x + col * scale, y + row * scale
                 d.rectangle([px, py, px + scale - 1, py + scale - 1], fill=color)
 
-SCALE = 2
+SCALE = 1  # render at native resolution, then upscale without interpolation
 W, H = 320 * SCALE, 172 * SCALE
 OUTDIR = os.path.join(os.path.dirname(__file__), "docs")
 os.makedirs(OUTDIR, exist_ok=True)
@@ -45,26 +46,40 @@ os.makedirs(OUTDIR, exist_ok=True)
 # ── colors ────────────────────────────────────────────────────────────────────
 BLACK    = (  0,   0,   0)
 WHITE    = (255, 255, 255)
-GREEN    = (  0, 210,  70)
-YELLOW   = (255, 215,   0)
-CYAN     = (  0, 215, 215)
-DARKGREY = ( 70,  70,  85)
+GREEN    = ( 72, 232, 150)
+YELLOW   = (255, 211,  72)
+CYAN     = ( 61, 220, 235)
+MAGENTA  = (235, 120, 195)
+DARKGREY = ( 83,  98, 105)
+HUD_BG   = ( 12,  16,  19)
+HUD_PANEL = (22,  27,  30)
+HUD_GRID = ( 43,  51,  56)
+HUD_SOFT = (146, 161, 164)
 NAVY     = ( 11,  22,  55)
 GOLD     = (232, 196,  74)
 PET      = (235, 140,  95)
 
 # ── fonts ─────────────────────────────────────────────────────────────────────
-_MONO = "/System/Library/Fonts/Monaco.ttf"
-def font(size): return ImageFont.truetype(_MONO, int(size * SCALE))
+FONT_PATH = Path(os.environ.get(
+    "GFX_FONT", str(Path.home() / "Documents/Arduino/libraries/"
+                    "GFX_Library_for_Arduino/src/font/glcdfont.h")))
+FONT_BYTES = None
+SZ1, SZ2, SZ3 = 1, 2, 3
 
-SZ1 = font(8)    # textSize 1 (~6px native -> 8px at 2×)
-SZ2 = font(13)   # textSize 2
-SZ3 = font(18)   # textSize 3
+
+def bitmap_font():
+    global FONT_BYTES
+    if FONT_BYTES is None:
+        if not FONT_PATH.is_file():
+            raise SystemExit("Install GFX Library for Arduino or set GFX_FONT to glcdfont.h")
+        body = FONT_PATH.read_text().split("PROGMEM = {", 1)[1].split("};", 1)[0]
+        FONT_BYTES = bytes(int(v, 16) for v in re.findall(r"0x([0-9A-Fa-f]{2})", body))
+    return FONT_BYTES
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 def s(v): return int(v * SCALE)   # scale a native coordinate
 
-def new_canvas(bg=BLACK):
+def new_canvas(bg=HUD_BG):
     img = Image.new("RGB", (W, H), bg)
     return img, ImageDraw.Draw(img)
 
@@ -72,21 +87,34 @@ def circle(d, cx, cy, r, color):
     d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=color)
 
 def rrect(d, x, y, w, h, r, color):
-    d.rounded_rectangle([x, y, x + w, y + h], radius=r, fill=color)
+    d.rounded_rectangle([x, y, x + w - 1, y + h - 1], radius=r, fill=color)
 
 def hline(d, x, y, length, color):
-    d.line([(x, y), (x + length, y)], fill=color, width=max(1, s(1)))
+    d.line([(x, y), (x + length - 1, y)], fill=color, width=max(1, s(1)))
 
 def text(d, x, y, txt, color, fnt=SZ2):
-    d.text((x, y), txt, fill=color, font=fnt)
+    data = bitmap_font()
+    for i, ch in enumerate(txt):
+        code = ord(ch) if 32 <= ord(ch) < 127 else ord("?")
+        for col in range(5):
+            for row in range(8):
+                if data[code * 5 + col] & (1 << row):
+                    px, py = x + (i * 6 + col) * fnt, y + row * fnt
+                    d.rectangle((px, py, px + fnt - 1, py + fnt - 1), fill=color)
 
 def text_w(txt, fnt=SZ2):
-    bb = fnt.getbbox(txt)
-    return bb[2] - bb[0]
+    return len(txt) * 6 * fnt
 
 def text_h(fnt=SZ2):
-    bb = fnt.getbbox("Ag")
-    return bb[3] - bb[1]
+    return 8 * fnt
+
+
+def center(d, txt, y, color, size=SZ1):
+    text(d, (W - text_w(txt, size)) // 2, y, txt, color, size)
+
+
+def fit(txt, length):
+    return txt if len(txt) <= length else txt[:length - 3] + "..."
 
 # ── pet character ─────────────────────────────────────────────────────────────
 def draw_pet_working(d, cx, cy, f=8):
@@ -99,12 +127,16 @@ def draw_pet_working(d, cx, cy, f=8):
     # body
     rrect(d, cx - s(28), by - s(22), s(56), s(46), s(16), PET)
     # eyes
-    circle(d, cx - s(11), by - s(3), s(4), BLACK)
-    circle(d, cx + s(11), by - s(3), s(4), BLACK)
+    if f % 30 < 2:
+        hline(d, cx - 16, by - 3, 9, NAVY)
+        hline(d, cx + 7, by - 3, 9, NAVY)
+    else:
+        circle(d, cx - s(11), by - s(3), s(4), NAVY)
+        circle(d, cx + s(11), by - s(3), s(4), NAVY)
     circle(d, cx - s(12), by - s(4), s(1), WHITE)
     circle(d, cx + s(10), by - s(4), s(1), WHITE)
     # nose dot
-    circle(d, cx, by + s(9), s(2), BLACK)
+    circle(d, cx, by + s(9), s(2), NAVY)
     # keyboard
     rrect(d, cx - s(18), by + s(26), s(36), s(7), s(2), DARKGREY)
     # paws tapping
@@ -123,22 +155,22 @@ def draw_pet_idle(d, cx, cy, f=5):
     circle(d, cx - s(16), by - s(20), s(6), PET)
     circle(d, cx + s(16), by - s(20), s(6), PET)
     # body (slightly inflated — breathing)
-    rrect(d, cx - s(28), by - s(20), s(56), s(44), s(16), PET)
+    br = int(math.sin(f * 0.12) * 2)
+    rrect(d, cx - 28 - br, by - 20 + br, 56 + br * 2, 46 - br, 16, PET)
     # closed eyes
     d.line([(cx - s(18), by - s(2)), (cx - s(7), by - s(2))],
-           fill=BLACK, width=max(2, s(2)))
+           fill=NAVY, width=max(2, s(2)))
     d.line([(cx + s(7), by - s(2)), (cx + s(18), by - s(2))],
-           fill=BLACK, width=max(2, s(2)))
+           fill=NAVY, width=max(2, s(2)))
     # sleepy mouth dot
-    circle(d, cx, by + s(8), s(1), BLACK)
+    circle(d, cx, by + s(8), s(1), NAVY)
     # z's drifting up
     for k in range(3):
         prog = (f // 3 + k * 9) % 30
         zx = cx + s(24) + s(prog // 3)
-        zy = by - s(16) - s(prog * 2)
+        zy = by - s(16) - s(prog)
         sz = SZ1 if prog < 15 else SZ2
-        alpha = max(60, 255 - max(0, (prog - 20) * 30))
-        col = (alpha, alpha, 255)
+        col = WHITE if prog < 24 else DARKGREY
         text(d, zx, zy, "z", col, sz)
 
 def draw_pet_done(d, cx, cy, f=3):
@@ -169,6 +201,10 @@ def draw_pet_done(d, cx, cy, f=3):
         d.rectangle([px, py, px + s(3), py + s(3)], fill=colors[i % 3])
 
 def draw_mini_pet(d, cx, cy, state="running", f=8):
+    if state == "unknown":
+        d.rounded_rectangle((cx - 15, cy - 12, cx + 14, cy + 13), radius=6, outline=DARKGREY)
+        text(d, cx - 6, cy - 7, "?", HUD_SOFT, SZ2)
+        return
     by = cy
     if state == "done":
         by = cy - int(abs(math.sin(f * 0.5)) * s(5))
@@ -201,11 +237,11 @@ def draw_mini_pet(d, cx, cy, state="running", f=8):
 
 def channel_dots(d, view=0):
     gap = s(16)
-    x0 = W - 3 * gap - s(10)
+    x0 = W - 3 * gap - s(9)
     y = H - s(12)
     for i in range(4):
-        r = s(5) if i == view else s(3)
-        col = WHITE if i == view else DARKGREY
+        r = s(4) if i == view else s(2)
+        col = [MAGENTA, CYAN, GREEN, YELLOW][i] if i == view else DARKGREY
         circle(d, x0 + i * gap, y, r, col)
 
 def divider(d, y): hline(d, 0, s(y), W, DARKGREY)
@@ -215,65 +251,136 @@ def status_color(status):
 
 def channel_header(d, name, status, windows, view=0):
     sc = status_color(status)
-    col = YELLOW if status == "done" else WHITE
-    text(d, s(8), s(4), name, col, SZ3)
-    dot_x = s(8) + text_w(name, SZ3) + s(10)
-    circle(d, dot_x, s(16), s(5), sc)
-    wc = "x%d" % windows
-    text(d, W - text_w(wc, SZ3) - s(8), s(4), wc, CYAN if windows else DARKGREY, SZ3)
-    divider(d, 32)
+    accent = [MAGENTA, CYAN, GREEN, YELLOW][view]
+    d.rectangle((0, 0, W - 1, 2), fill=accent)
+    d.rectangle((0, 3, W - 1, 32), fill=HUD_PANEL)
+    circle(d, 11, 16, 4, sc)
+    text(d, 21, 10, fit(name, 9), WHITE, SZ2)
+    text(d, 145, 14, {"running": "LIVE", "done": "DONE", "unknown": "N/A"}.get(status, "IDLE"), sc, SZ1)
+    for i in range(3):
+        d.rectangle((178 + i * 5, 15, 180 + i * 5, 19),
+                    fill=GREEN if status == "running" and i == 2 else HUD_GRID)
+    wc = f"{windows:02d}" if windows <= 99 else "99+"
+    text(d, W - text_w(wc, SZ2) - 10, 5, wc, CYAN if windows else DARKGREY, SZ2)
+    text(d, W - 34, 23, "SESS", HUD_SOFT, SZ1)
+    hline(d, 8, 33, W - 16, HUD_GRID)
 
 def bottom_bar(d, usage, view=0):
-    divider(d, H // SCALE - 26)
-    text(d, s(8), H - s(20), usage[:26] if usage else "-- no usage --",
+    d.rectangle((0, 143, W - 1, H - 1), fill=HUD_PANEL)
+    hline(d, 0, 143, W, HUD_GRID)
+    text(d, 8, 146, "USAGE", HUD_SOFT, SZ1)
+    text(d, 8, 155, fit(usage, 20) if usage else "-- no usage --",
          CYAN if usage else DARKGREY, SZ2)
     channel_dots(d, view)
+
+
+def main_frame(d, accent):
+    for y in range(49, 114, 16):
+        hline(d, 30, y, W - 60, (19, 25, 28))
+    d.line(((8, 47), (8, 40), (21, 40)), fill=accent)
+    d.line(((W - 22, 121), (W - 9, 121), (W - 9, 114)), fill=accent)
+
+
+def rails(d, status, frame):
+    for x, f in [(16, frame), (W - 19, frame + 9)]:
+        for i in range(6):
+            h = (3 + (f + i * 5) % 12 if status == "running" else
+                 5 + (f + i * 2) % 7 if status == "done" else 3 + i % 2)
+            rrect(d, x, 47 + i * 11 + (12 - h) // 2, 3, h, 1,
+                  HUD_GRID if status == "idle" else status_color(status))
+
+
+def task_line(d, task):
+    text(d, 8, 132, "TASK", HUD_SOFT, SZ1)
+    text(d, 44, 132, fit(task, 44), WHITE, SZ1)
+
+
+def screen_channel(name="Codex", status="running", windows=1, usage="", task="session active",
+                   pets=None, view=1, frame=8):
+    img, d = new_canvas()
+    channel_header(d, name, status, windows, view)
+    main_frame(d, [MAGENTA, CYAN, GREEN, YELLOW][view])
+    rails(d, status, frame)
+    pets = pets if pets is not None else [status]
+    if len(pets) <= 1:
+        st = pets[0] if pets else status
+        if st == "unknown":
+            d.rounded_rectangle((132, 58, 187, 103), radius=8, outline=DARKGREY)
+            text(d, 151, 69, "?", HUD_SOFT, SZ3)
+        else:
+            {"running": draw_pet_working, "idle": draw_pet_idle, "done": draw_pet_done}[st](
+                d, W // 2, 80, frame)
+        center(d, {"running": "WORKING", "idle": "READY", "done": "COMPLETE", "unknown": "NO SIGNAL"}[st],
+               117, HUD_SOFT if st in ("idle", "unknown") else status_color(st))
+    else:
+        n = min(len(pets), 6)
+        rows = 1 if n <= 3 else 2
+        top = n if rows == 1 else (n + 1) // 2
+        idx = 0
+        for row in range(rows):
+            count = top if row == 0 else n - top
+            cy = 75 if rows == 1 else 58 if row == 0 else 103
+            start = (W - (count - 1) * 92) // 2
+            for col in range(count):
+                cx = start + col * 92
+                st = pets[idx]
+                draw_mini_pet(d, cx, cy, st, frame + idx * 7)
+                label = f"{idx + 1}/" + {"running": "LIVE", "idle": "IDLE", "done": "DONE", "unknown": "N/A"}[st]
+                text(d, cx - 15, cy + 17, label, status_color(st), SZ1)
+                idx += 1
+        hidden = max(len(pets), windows) - n
+        if hidden > 0:
+            label = f"+{hidden}"
+            text(d, W - 10 - text_w(label, SZ1), 36, label, HUD_SOFT, SZ1)
+    task_line(d, task)
+    bottom_bar(d, usage, view)
+    return img
 
 # ── screens ───────────────────────────────────────────────────────────────────
 
 def screen_working():
-    img, d = new_canvas()
-    channel_header(d, "Claude", "running", 2)
-    draw_pet_working(d, W // 2, s(80), f=8)
-    text(d, W // 2 - text_w("working", SZ2) // 2, s(120), "working", GREEN, SZ2)
-    bottom_bar(d, "5h 42%  ctx 17%")
-    return img
+    return screen_channel(usage="5h 42%  ctx 17%", task="refine dashboard layout")
 
 def screen_idle():
-    img, d = new_canvas()
-    channel_header(d, "Codex", "idle", 0)
-    draw_pet_idle(d, W // 2, s(80), f=5)
-    text(d, W // 2 - text_w("zzz", SZ2) // 2, s(120), "zzz", DARKGREY, SZ2)
-    bottom_bar(d, "", view=1)
-    return img
+    return screen_channel(status="idle", windows=0, task="awaiting input", frame=5)
 
 def screen_done():
     """Full-screen celebration."""
-    img, d = new_canvas(NAVY)
-    draw_pet_done(d, W // 2, s(70), f=3)
-    text(d, W // 2 - text_w("DONE!", SZ3) // 2, s(116), "DONE!", YELLOW, SZ3)
-    text(d, W // 2 - text_w("Claude", SZ2) // 2, s(148), "Claude", WHITE, SZ2)
+    img, d = new_canvas()
+    d.rectangle((0, 0, W - 1, 3), fill=CYAN)
+    text(d, 12, 12, "TASK COMPLETE", CYAN, SZ1)
+    text(d, W - 12 - text_w("CODEX", SZ1), 12, "CODEX", HUD_SOFT, SZ1)
+    main_frame(d, CYAN)
+    draw_pet_done(d, W // 2, 77, f=3)
+    center(d, "DONE!", 118, CYAN, SZ3)
+    center(d, "READY FOR THE NEXT TASK", 151, HUD_SOFT)
+    d.rectangle((8, 166, 240, 167), fill=CYAN)
     return img
 
 def screen_multi():
     """Multiple sessions — grid of mini pets."""
+    return screen_channel("Claude", windows=8, view=0, usage="5h 71%  ctx 22%",
+                          task="run regression tests",
+                          pets=["running", "done", "idle", "running", "idle", "idle", "idle", "idle"])
+
+
+def screen_offline():
     img, d = new_canvas()
-    channel_header(d, "Claude", "running", 5)
-    pets = ["running", "running", "idle", "idle", "idle"]
-    n = len(pets)
-    rows = 1 if n <= 3 else 2
-    top = n if rows == 1 else (n + 1) // 2
-    pitch = s(92)
-    idx = 0
-    for r in range(rows):
-        k = top if r == 0 else (n - top)
-        cy = s(62) if rows == 2 and r == 0 else (s(104) if r == 1 else s(80))
-        startx = (W - (k - 1) * pitch) // 2
-        for ci in range(k):
-            draw_mini_pet(d, startx + ci * pitch, cy, pets[idx], f=8 + idx * 7)
-            idx += 1
-    bottom_bar(d, "5h 71%  ctx 22%")
+    d.rectangle((0, 0, W - 1, 2), fill=YELLOW)
+    center(d, "CLI DASHBOARD", 18, WHITE, SZ2)
+    d.rounded_rectangle((143, 55, 176, 84), radius=4, outline=HUD_SOFT)
+    hline(d, 151, 63, 8, CYAN)
+    hline(d, 161, 63, 8, CYAN)
+    d.line(((160, 85), (160, 98)), fill=HUD_SOFT)
+    hline(d, 150, 99, 21, HUD_SOFT)
+    center(d, "HUB OFFLINE", 111, YELLOW, SZ2)
+    center(d, "USB / 14s", 145, HUD_SOFT)
     return img
+
+
+def screen_unknown():
+    return screen_channel("Claude", status="unknown", windows=3, view=0,
+                          pets=["unknown"] * 3, task="no lifecycle signal")
 
 def draw_badge(d, cx, cy):
     """Gold G badge ring."""
@@ -329,18 +436,21 @@ def screen_welcome():
 
 # ── generate ──────────────────────────────────────────────────────────────────
 SHOTS = [
-    ("screen_working",  screen_working,  "Claude active — pet typing"),
+    ("screen_working",  screen_working,  "Codex active — pet typing"),
     ("screen_idle",     screen_idle,     "All idle — pet sleeping"),
     ("screen_done",     screen_done,     "Task finished — celebration"),
     ("screen_multi",    screen_multi,    "Multiple sessions — mini-pet grid"),
     ("screen_sleep",    screen_sleep,    "Mac display off — sleep mode"),
     ("screen_boot",     screen_boot,     "Boot splash (typewriter mid-animation)"),
     ("screen_welcome",  screen_welcome,  "Wake animation — 主人欢迎回来"),
+    ("screen_offline",  screen_offline,  "Hub disconnected"),
+    ("screen_unknown",  screen_unknown,  "Process present without lifecycle events"),
 ]
 
-for name, fn, desc in SHOTS:
-    path = os.path.join(OUTDIR, name + ".png")
-    fn().save(path)
-    print(f"  {name}.png  — {desc}")
+if __name__ == "__main__":
+    for name, fn, desc in SHOTS:
+        path = os.path.join(OUTDIR, name + ".png")
+        fn().resize((640, 344), Image.Resampling.NEAREST).save(path)
+        print(f"  {name}.png  — {desc}")
 
-print(f"\nAll screenshots saved to {OUTDIR}/")
+    print(f"\nAll screenshots saved to {OUTDIR}/")

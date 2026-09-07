@@ -4,9 +4,10 @@
 // BOOT (GPIO9) cycles channels. On-board WS2812 (GPIO8) breathes on completion.
 //
 // Board:  esp32:esp32:esp32c6:CDCOnBoot=cdc   (Serial = USB CDC)
-// Libs:   GFX Library for Arduino, ArduinoJson
+// Libs:   GFX Library for Arduino, ArduinoJson, U8g2
 
 #include <ArduinoJson.h>
+#include <U8g2lib.h>
 #include <Arduino_GFX_Library.h>
 #include "cjk_glyphs.h"          // 1-bit glyphs for "创意开发"
 #include "welcome_glyphs.h"       // 1-bit glyphs for "主人欢迎回来"
@@ -14,14 +15,18 @@
 #define BLACK    RGB565_BLACK
 #define WHITE    RGB565_WHITE
 #define RED      RGB565_RED
-#define GREEN    RGB565_GREEN
-#define YELLOW   RGB565_YELLOW
-#define CYAN     RGB565_CYAN
-#define MAGENTA  RGB565_MAGENTA
-#define DARKGREY RGB565_DARKGREY
+#define GREEN    RGB565(72, 232, 150)
+#define YELLOW   RGB565(255, 211, 72)
+#define CYAN     RGB565(61, 220, 235)
+#define MAGENTA  RGB565(235, 120, 195)
+#define DARKGREY RGB565(83, 98, 105)
 #define NAVY     RGB565(11, 22, 55)     // splash background
-#define GOLD     RGB565(232, 196, 74)   // logo badge
-#define PET      RGB565(235, 140, 95)   // pet body (coral)
+#define HUD_BG   RGB565(12, 16, 19)      // dashboard background
+#define HUD_PANEL RGB565(22, 27, 30)     // dashboard header/footer
+#define HUD_GRID RGB565(43, 51, 56)      // low-contrast instrumentation
+#define HUD_SOFT RGB565(146, 161, 164)   // secondary text
+#define GOLD     RGB565(232, 196, 74)    // logo badge
+#define PET      RGB565(235, 140, 95)    // pet body (coral)
 
 // Waveshare ESP32-C6-LCD-1.47 pin map
 #define LCD_DC   15
@@ -36,36 +41,45 @@
 
 Arduino_DataBus *bus = new Arduino_ESP32SPI(LCD_DC, LCD_CS, LCD_SCK, LCD_MOSI, GFX_NOT_DEFINED);
 Arduino_GFX *panel = new Arduino_ST7789(bus, LCD_RST, 1, true, 172, 320, 34, 0, 34, 0);
-Arduino_GFX *gfx = new Arduino_Canvas(320, 172, panel);
+Arduino_Canvas *gfx = new Arduino_Canvas(320, 172, panel);
 
 const int W = 320, H = 172;
 const int NUM = 4;
 struct Chan {
+  String id = "";
   String name = "?";
   int windows = 0;
   String usage = "";
   String status = "idle";
   String tasks[5];
+  String taskDisplay = "";
   int nTasks = 0;
   String pets[8];
   int nPets = 0;
 };
 Chan chans[NUM];
-int view = 0;
+int view = 1;   // default to Codex
+int focusSeen = -1;
+uint32_t focusRevisionSeen = 0;
 bool haveData = false;
+bool everHadData = false;
 int flashSeen = -1;
 int btnPrev = HIGH;
 uint32_t btnMs = 0;
 uint32_t lastData = 0;
 uint32_t animFrame = 0, lastAnim = 0;
-uint32_t celebrateUntil = 0;   // full-screen completion celebration window
+uint32_t celebrateStart = 0;
+bool celebrating = false;
 String doneCli = "";
 String doneCliId = "";
 bool isSleep = false;
+const uint32_t STALE_MS = 12000;
+const uint32_t CELEBRATE_MS = 2200;
 
 // serial line buffer
-char buf[3072];
+char buf[8192];
 int blen = 0;
+bool lineOverflow = false;
 
 // LED breathing
 bool ledActive = false;
@@ -96,6 +110,9 @@ static String fit(const String &s, int maxChars) {
   if ((int)s.length() <= maxChars) return s;
   return s.substring(0, maxChars - 3) + "...";
 }
+static String displayStatus(const String &s) {
+  return s == "running" || s == "done" || s == "unknown" ? s : String("idle");
+}
 static void centerText(const String &s, int y, int size, uint16_t color) {
   gfx->setTextSize(size);
   gfx->setTextColor(color);
@@ -116,13 +133,137 @@ static void ledTick() {
 }
 
 static void drawChannelDots() {
-  int gap = 16, x0 = W - (NUM - 1) * gap - 10, y = H - 12;
+  int gap = 16, x0 = W - (NUM - 1) * gap - 9, y = H - 12;
   for (int i = 0; i < NUM; i++)
-    gfx->fillCircle(x0 + i * gap, y, (i == view) ? 5 : 3, (i == view) ? WHITE : DARKGREY);
+    gfx->fillCircle(x0 + i * gap, y, (i == view) ? 4 : 2,
+                    (i == view) ? cliColor(chans[i].id) : DARKGREY);
+}
+
+static const char *statusLabel(const String &s) {
+  if (s == "running") return "LIVE";
+  if (s == "done") return "DONE";
+  if (s == "unknown") return "N/A";
+  return "IDLE";
+}
+
+static void drawHeader(const Chan &c) {
+  uint16_t accent = cliColor(c.id);
+  uint16_t stateColor = statusColor(c.status);
+  gfx->fillRect(0, 0, W, 3, accent);
+  gfx->fillRect(0, 3, W, 30, HUD_PANEL);
+
+  gfx->fillCircle(11, 16, 4, stateColor);
+  gfx->setTextSize(2);
+  gfx->setTextColor(WHITE);
+  gfx->setCursor(21, 10);
+  gfx->print(fit(c.name, 9));
+
+  gfx->setTextSize(1);
+  gfx->setTextColor(stateColor);
+  gfx->setCursor(145, 14);
+  gfx->print(statusLabel(c.status));
+  for (int i = 0; i < 3; i++)
+    gfx->fillRect(178 + i * 5, 15, 3, 5,
+                  c.status == "running" && (animFrame / 4) % 3 == (uint32_t)i ? GREEN : HUD_GRID);
+
+  String wc = c.windows > 99 ? String("99+") :
+              String(c.windows < 10 ? "0" : "") + String(c.windows);
+  gfx->setTextSize(2);
+  gfx->setTextColor(c.windows > 0 ? CYAN : DARKGREY);
+  gfx->setCursor(W - wc.length() * 12 - 10, 5);
+  gfx->print(wc);
+  gfx->setTextSize(1);
+  gfx->setTextColor(HUD_SOFT);
+  gfx->setCursor(W - 34, 23);
+  gfx->print("SESS");
+
+  gfx->drawFastHLine(8, 33, W - 16, HUD_GRID);
+}
+
+static void drawTelemetryRail(int x, const String &st, uint32_t f, bool mirrored) {
+  uint16_t c = st == "idle" ? HUD_GRID : statusColor(st);
+  for (int i = 0; i < 6; i++) {
+    int h = st == "running" ? 3 + (int)((f + i * 5) % 12) :
+            st == "done" ? 5 + (int)((f + i * 2) % 7) : 3 + (i % 2);
+    int yy = 47 + i * 11;
+    int xx = mirrored ? x - 3 : x;
+    gfx->fillRoundRect(xx, yy + (12 - h) / 2, 3, h, 1, c);
+  }
+}
+
+static void drawMainFrame(uint16_t accent) {
+  for (int y = 49; y <= 113; y += 16)
+    gfx->drawFastHLine(30, y, W - 60, RGB565(19, 25, 28));
+  gfx->drawFastHLine(8, 40, 14, accent);
+  gfx->drawFastVLine(8, 40, 8, accent);
+  gfx->drawFastHLine(W - 22, 121, 14, accent);
+  gfx->drawFastVLine(W - 9, 114, 8, accent);
+}
+
+static void updateTaskDisplay(Chan &c) {
+  gfx->setTextSize(1);
+  String task = c.nTasks > 0 && c.tasks[0].length() ? c.tasks[0] :
+                String(c.status == "running" ? "session active" :
+                       c.status == "unknown" ? "no lifecycle signal" : "awaiting input");
+  task.replace("\n", " ");
+  task.replace("\r", " ");
+  gfx->setFont(u8g2_font_chill7_h_cjk);
+  gfx->setUTF8Print(true);
+  int16_t x, y;
+  uint16_t w, h;
+  String shown = task;
+  while (shown.length()) {
+    gfx->getTextBounds(shown.c_str(), 0, 0, &x, &y, &w, &h);
+    if (w <= 268) break;
+    // Trim a whole UTF-8 code point so a clipped Chinese title stays valid.
+    int end = task.length() - 1;
+    while (end > 0 && ((uint8_t)task[end] & 0xC0) == 0x80) end--;
+    task = task.substring(0, end);
+    shown = task + "...";
+  }
+  c.taskDisplay = shown;
+  gfx->setUTF8Print(false);
+  gfx->setFont((const GFXfont *)nullptr);
+}
+
+static void drawTaskLine(const Chan &c) {
+  gfx->setTextSize(1);
+  gfx->setTextColor(HUD_SOFT);
+  gfx->setCursor(8, 132);
+  gfx->print("TASK");
+  gfx->setFont(u8g2_font_chill7_h_cjk);
+  gfx->setUTF8Print(true);
+  gfx->setTextColor(WHITE);
+  gfx->setCursor(44, 138);
+  gfx->print(c.taskDisplay);
+  gfx->setUTF8Print(false);
+  gfx->setFont((const GFXfont *)nullptr);
+}
+
+static void drawFooter(const Chan &c) {
+  gfx->fillRect(0, 143, W, H - 143, HUD_PANEL);
+  gfx->drawFastHLine(0, 143, W, HUD_GRID);
+  gfx->setTextSize(1);
+  gfx->setTextColor(HUD_SOFT);
+  gfx->setCursor(8, 146);
+  gfx->print("USAGE");
+  gfx->setTextSize(2);
+  gfx->setTextColor(c.usage.length() ? CYAN : DARKGREY);
+  gfx->setCursor(8, 155);
+  gfx->print(fit(c.usage.length() ? c.usage : String("-- no usage --"), 20));
+  drawChannelDots();
 }
 
 // animated desk pet — a distinct little act per status
 static void drawPet(int cx, int cy, const String &st, uint32_t f) {
+  if (st == "unknown") {
+    gfx->drawRoundRect(cx - 28, cy - 22, 56, 46, 8, DARKGREY);
+    gfx->setTextSize(3);
+    gfx->setTextColor(HUD_SOFT);
+    gfx->setCursor(cx - 9, cy - 11);
+    gfx->print("?");
+    return;
+  }
   if (st == "done") {                    // CELEBRATE: hop + arms up + confetti
     int jump = (int)(fabsf(sinf(f * 0.5f)) * 9.0f);
     int by = cy - jump;
@@ -180,6 +321,14 @@ static void drawPet(int cx, int cy, const String &st, uint32_t f) {
 
 // compact pet for when several sessions are active at once
 static void drawMiniPet(int cx, int cy, const String &st, uint32_t f) {
+  if (st == "unknown") {
+    gfx->drawRoundRect(cx - 15, cy - 12, 30, 26, 6, DARKGREY);
+    gfx->setTextSize(2);
+    gfx->setTextColor(HUD_SOFT);
+    gfx->setCursor(cx - 6, cy - 7);
+    gfx->print("?");
+    return;
+  }
   int by = cy;
   if (st == "done") by = cy - (int)(fabsf(sinf(f * 0.5f)) * 5.0f);
   else if (st == "running") by = cy + (int)(sinf(f * 0.4f) * 2.0f);
@@ -210,32 +359,51 @@ static void drawCelebrate(uint32_t f) {
   uint16_t accent = cliColor(doneCliId);
   String name = doneCli.length() ? doneCli : String("CLI");
   name.toUpperCase();
-  gfx->fillScreen(RGB565(5, 9, 24));
-  gfx->fillRect(0, 0, W, 8, accent);
-  gfx->drawRoundRect(8, 14, W - 16, 42, 7, accent);
-  centerText(name, 24, 3, WHITE);
-  drawPet(W / 2, 92, "done", f);
-  centerText("DONE!", 136, 3, accent);
+  gfx->fillScreen(HUD_BG);
+  gfx->fillRect(0, 0, W, 4, accent);
+  gfx->setTextSize(1);
+  gfx->setTextColor(accent);
+  gfx->setCursor(12, 12);
+  gfx->print("TASK COMPLETE");
+  gfx->setTextColor(HUD_SOFT);
+  gfx->setCursor(W - 12 - name.length() * 6, 12);
+  gfx->print(name);
+  drawMainFrame(accent);
+  drawPet(W / 2, 77, "done", f);
+  centerText("DONE!", 118, 3, accent);
+  centerText("READY FOR THE NEXT TASK", 151, 1, HUD_SOFT);
+  uint32_t elapsed = millis() - celebrateStart;
+  int remaining = elapsed >= CELEBRATE_MS ? 0 : (W - 16) * (CELEBRATE_MS - elapsed) / CELEBRATE_MS;
+  gfx->fillRect(8, 166, remaining, 2, accent);
+  gfx->flush();
+}
+
+static void drawConnection() {
+  gfx->fillScreen(HUD_BG);
+  gfx->fillRect(0, 0, W, 3, everHadData ? YELLOW : CYAN);
+  centerText("CLI DASHBOARD", 18, 2, WHITE);
+  gfx->drawRoundRect(143, 55, 34, 30, 4, HUD_SOFT);
+  gfx->drawFastHLine(151, 63, 8, CYAN);
+  gfx->drawFastHLine(161, 63, 8, CYAN);
+  gfx->drawFastVLine(160, 85, 14, HUD_SOFT);
+  gfx->drawFastHLine(150, 99, 21, HUD_SOFT);
+  centerText(everHadData ? "HUB OFFLINE" : "CONNECTING", 111, 2, everHadData ? YELLOW : CYAN);
+  centerText("USB / " + String((millis() - lastData) / 1000) + "s", 145, 1, HUD_SOFT);
   gfx->flush();
 }
 
 static void renderView() {
   if (!haveData) {
-    drawLogoFinal();   // idle / waiting screen = frozen splash end-state
+    drawConnection();
     return;
   }
-  gfx->fillScreen(BLACK);
   Chan &c = chans[view];
-  uint16_t sc = statusColor(c.status);
-  gfx->setTextSize(3);
-  gfx->setTextColor(c.status == "done" ? YELLOW : WHITE);
-  gfx->setCursor(8, 4); gfx->print(c.name);
-  gfx->fillCircle(8 + c.name.length() * 18 + 10, 16, 5, sc);
-  String wc = "x" + String(c.windows);
-  gfx->setTextSize(3);
-  gfx->setTextColor(c.windows > 0 ? CYAN : DARKGREY);
-  gfx->setCursor(W - wc.length() * 18 - 8, 4); gfx->print(wc);
-  gfx->drawFastHLine(0, 32, W, DARKGREY);
+  uint16_t accent = cliColor(c.id);
+  gfx->fillScreen(HUD_BG);
+  drawHeader(c);
+  drawMainFrame(accent);
+  drawTelemetryRail(16, c.status, animFrame, false);
+  drawTelemetryRail(W - 16, c.status, animFrame + 9, true);
 
   // middle: one big pet if <=1 session, else a grid of mini pets (each own state)
   int np = c.nPets;
@@ -243,11 +411,11 @@ static void renderView() {
     String s = (np == 1) ? c.pets[0] : c.status;
     drawPet(W / 2, 80, s, animFrame);
     const char *cap; uint16_t capc;
-    if (s == "running")   { cap = "working"; capc = GREEN; }
-    else if (s == "done") { cap = "done!";   capc = YELLOW; }
-    else                  { cap = "zzz";     capc = DARKGREY; }
-    gfx->setTextSize(2); gfx->setTextColor(capc);
-    gfx->setCursor((W - (int)strlen(cap) * 12) / 2, 120); gfx->print(cap);
+    if (s == "running")   { cap = "WORKING"; capc = GREEN; }
+    else if (s == "done") { cap = "COMPLETE"; capc = YELLOW; }
+    else if (s == "unknown") { cap = "NO SIGNAL"; capc = HUD_SOFT; }
+    else                  { cap = "READY"; capc = HUD_SOFT; }
+    centerText(cap, 117, 1, capc);
   } else {
     int n = np > 6 ? 6 : np;
     int rows = (n <= 3) ? 1 : 2;
@@ -256,31 +424,27 @@ static void renderView() {
     int idx = 0;
     for (int r = 0; r < rows; r++) {
       int k = (r == 0) ? top : (n - top);
-      int cyp = (rows == 1) ? 80 : (r == 0 ? 62 : 104);
+      int cyp = (rows == 1) ? 75 : (r == 0 ? 58 : 103);
       int startx = (W - (k - 1) * pitch) / 2;
       for (int ci = 0; ci < k; ci++) {
         drawMiniPet(startx + ci * pitch, cyp, c.pets[idx], animFrame + idx * 7);
+        gfx->setTextSize(1);
+        gfx->setTextColor(statusColor(c.pets[idx]));
+        gfx->setCursor(startx + ci * pitch - 15, cyp + 17);
+        gfx->print(String(idx + 1) + "/" + statusLabel(c.pets[idx]));
         idx++;
       }
     }
-    if (np > 6) {
-      gfx->setTextSize(1); gfx->setTextColor(WHITE);
-      gfx->setCursor(W - 28, 36); gfx->print("+" + String(np - 6));
+    int hidden = max(np, c.windows) - n;
+    if (hidden > 0) {
+      gfx->setTextSize(1); gfx->setTextColor(HUD_SOFT);
+      String extra = "+" + String(hidden);
+      gfx->setCursor(W - 10 - extra.length() * 6, 36); gfx->print(extra);
     }
   }
 
-  gfx->drawFastHLine(0, H - 26, W, DARKGREY);
-  gfx->setTextSize(2); gfx->setTextColor(CYAN);
-  gfx->setCursor(8, H - 20);
-  gfx->print(fit(c.usage.length() ? c.usage : String("-- no usage --"), 26));
-  drawChannelDots();
-  gfx->flush();
-}
-
-static void centerMsg(const char *msg, uint16_t color) {
-  gfx->fillScreen(BLACK);
-  gfx->setTextSize(2); gfx->setTextColor(color);
-  gfx->setCursor(10, 78); gfx->print(msg);
+  drawTaskLine(c);
+  drawFooter(c);
   gfx->flush();
 }
 
@@ -289,14 +453,28 @@ static void parseState(const char *body) {
   JsonDocument doc;
   if (deserializeJson(doc, body)) return;
 
+  if (doc["capture"].as<bool>()) {
+    Serial.printf("FRAME 320 172 RGB565LE %d\n", view);
+    Serial.write((const uint8_t *)gfx->getFramebuffer(), W * H * 2);
+    return;
+  }
+
   // sleep packet from host
   if (doc["sleep"].as<bool>()) {
     if (!isSleep) {
       isSleep = true;
-      splash();                // boot animation -> then Zzz loop takes over
+      celebrating = false;
+      ledActive = false;
+      ledOff();
+      drawSleepScreen(animFrame);
     }
+    lastData = millis();
     return;
   }
+  JsonArray channels = doc["channels"].as<JsonArray>();
+  if (channels.size() != NUM) return;
+  for (JsonVariant channel : channels)
+    if (!channel.is<JsonObject>()) return;
   // waking up: play welcome animation before restoring dashboard
   bool wasSleeping = isSleep;
   isSleep = false;
@@ -304,15 +482,15 @@ static void parseState(const char *body) {
   int flash = doc["flash"] | 0;
   const char *dc = doc["done_cli"] | "";
   String dcName = "";
-  int dcIdx = -1;
   int idx = 0;
-  for (JsonObject ch : doc["channels"].as<JsonArray>()) {
+  for (JsonObject ch : channels) {
     if (idx >= NUM) break;
     Chan &c = chans[idx];
+    c.id = String((const char *)(ch["id"] | ""));
     c.name = String((const char *)(ch["name"] | "?"));
-    c.windows = ch["windows"] | 0;
+    c.windows = max(0, ch["windows"] | 0);
     c.usage = String((const char *)(ch["usage"] | ""));
-    c.status = String((const char *)(ch["status"] | "idle"));
+    c.status = displayStatus(String((const char *)(ch["status"] | "idle")));
     c.nTasks = 0;
     for (JsonVariant t : ch["tasks"].as<JsonArray>()) {
       if (c.nTasks >= 5) break;
@@ -323,30 +501,41 @@ static void parseState(const char *body) {
     for (JsonVariant p : ch["pets"].as<JsonArray>()) {
       if (c.nPets >= 8) break;
       const char *s = p.as<const char *>();
-      c.pets[c.nPets++] = String(s ? s : "idle");
+      c.pets[c.nPets++] = displayStatus(String(s ? s : "idle"));
     }
     if (dc[0] && strcmp((const char *)(ch["id"] | ""), dc) == 0) {
       dcName = c.name;
-      dcIdx = idx;
     }
+    updateTaskDisplay(c);
     idx++;
   }
   haveData = true;
+  everHadData = true;
   lastData = millis();
-  if (flashSeen < 0) flashSeen = flash;
-  else if (flash > flashSeen) {
+  int focusedView = doc["view"] | -1;
+  uint32_t focusRevision = doc["focus_rev"] | (uint32_t)0;
+  if (focusedView >= 0 && focusedView < NUM &&
+      (focusedView != focusSeen || focusRevision != focusRevisionSeen)) {
+    view = focusedView;
+    focusSeen = focusedView;
+    focusRevisionSeen = focusRevision;
+  } else if (focusedView < 0) {
+    focusSeen = -1;
+    focusRevisionSeen = 0;
+  }
+  if (flashSeen >= 0 && flash > flashSeen) {
     doneCliId = String(dc);
     doneCli = dcName.length() ? dcName : String("CLI");
-    if (dcIdx >= 0) view = dcIdx;
     setLedColorForCli(doneCliId);
     ledActive = true; ledStart = millis();
-    celebrateUntil = millis() + 2200;
-    flashSeen = flash;
+    celebrateStart = millis();
+    celebrating = true;
   }
+  flashSeen = flash;  // resync after a hub restart resets its counter
   if (wasSleeping) {
     drawWelcome();             // typewriter greeting before dashboard
   }
-  if (millis() < celebrateUntil) drawCelebrate(animFrame);
+  if (celebrating && millis() - celebrateStart < CELEBRATE_MS) drawCelebrate(animFrame);
   else renderView();
 }
 
@@ -467,15 +656,19 @@ static void splash() {
 void setup() {
   setCpuFrequencyMhz(80);            // lower clock -> less heat
   Serial.begin(115200);              // USB CDC (CDCOnBoot=cdc)
+  Serial.setRxBufferSize(sizeof(buf));
+  Serial.setTxTimeoutMs(3000);
   pinMode(BOOT_BTN, INPUT_PULLUP);
   pinMode(LCD_BL, OUTPUT);
   digitalWrite(LCD_BL, LOW);         // backlight OFF until the screen is cleared
   ledOff();
   gfx->begin();
+  gfx->setTextWrap(false);
   gfx->fillScreen(NAVY);             // paint splash bg first...
   gfx->flush();
   analogWrite(LCD_BL, BL_LEVEL);     // ...then turn backlight on -> no garbage flash
   splash();                          // boot animation -> rests on logo screen
+  renderView();
 }
 
 void loop() {
@@ -484,7 +677,8 @@ void loop() {
   if (b == LOW && btnPrev == HIGH && millis() - btnMs > 200) {
     view = (view + 1) % NUM;
     btnMs = millis();
-    renderView();
+    celebrating = false;
+    if (!isSleep) renderView();
   }
   btnPrev = b;
 
@@ -493,10 +687,12 @@ void loop() {
     char ch = Serial.read();
     if (ch == '\n') {
       buf[blen] = 0;
-      if (blen > 1) parseState(buf);
+      if (!lineOverflow && blen > 1) parseState(buf);
       blen = 0;
-    } else if (ch != '\r' && blen < (int)sizeof(buf) - 1) {
-      buf[blen++] = ch;
+      lineOverflow = false;
+    } else if (ch != '\r') {
+      if (blen < (int)sizeof(buf) - 1) buf[blen++] = ch;
+      else lineOverflow = true;
     }
   }
 
@@ -506,16 +702,18 @@ void loop() {
     animFrame++;
     if (isSleep) {
       drawSleepScreen(animFrame);
-    } else if (haveData) {
-      if (millis() < celebrateUntil) drawCelebrate(animFrame);
-      else renderView();
+    } else {
+      if (celebrating && millis() - celebrateStart < CELEBRATE_MS) drawCelebrate(animFrame);
+      else { celebrating = false; renderView(); }
     }
   }
 
   // stale-data hint if host stopped feeding
-  if (haveData && millis() - lastData > 12000) {
+  if ((haveData || isSleep) && millis() - lastData > STALE_MS) {
     haveData = false;
-    renderView();   // data stopped -> back to the frozen logo screen
+    isSleep = false;
+    celebrating = false;
+    renderView();
   }
   ledTick();
   delay(15);

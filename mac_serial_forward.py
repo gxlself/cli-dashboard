@@ -9,6 +9,7 @@ Run:  python3 mac_serial_forward.py
 """
 import ctypes
 import ctypes.util
+import encodings.idna  # noqa: F401  preload the codec urllib needs on first poll
 import glob
 import os
 import time
@@ -16,6 +17,11 @@ import urllib.request
 
 HUB = "http://127.0.0.1:8722/state"
 INTERVAL = 2.0
+# After this many consecutive hub failures, exit so launchd's KeepAlive restarts
+# us cleanly. Guards against a long-running interpreter whose on-disk files were
+# replaced underneath it (e.g. Homebrew upgrading python deletes the old Cellar),
+# which makes lazy imports fail forever — the "unknown encoding: idna" loop.
+MAX_HUB_ERRORS = 30
 
 
 def _load_cg():
@@ -48,6 +54,7 @@ def find_port():
 
 def main():
     fd = None
+    hub_errors = 0
     while True:
         if fd is None:
             port = find_port()
@@ -67,8 +74,13 @@ def main():
         else:
             try:
                 data = urllib.request.urlopen(HUB, timeout=3).read().strip()
+                hub_errors = 0
             except Exception as e:
-                print("hub error:", e)
+                hub_errors += 1
+                print(f"hub error ({hub_errors}/{MAX_HUB_ERRORS}):", e, flush=True)
+                if hub_errors >= MAX_HUB_ERRORS:
+                    print("too many hub errors; exiting for a clean launchd restart", flush=True)
+                    raise SystemExit(1)
                 time.sleep(1)
                 continue
         # The board's USB-CDC RX buffer is small (~256B); send in small paced

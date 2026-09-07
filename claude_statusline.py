@@ -5,15 +5,14 @@ settings.json statusLine.command:  python3 claude_statusline.py
 Reads the rich statusline JSON on stdin, POSTs usage (5h / weekly / cost / ctx)
 to the hub, and prints a short status string for the terminal.
 
-Field names for cost/context/rate_limits are verified against the real JSON
-which we also dump to DEBUG_RAW for inspection.
+Usage refreshes update presence and quota, never the assistant's running state.
 """
 import json
+import os
 import sys
 import urllib.request
 
-HUB = "http://127.0.0.1:8722/event"
-DEBUG_RAW = "/tmp/claude_statusline_raw.json"
+HUB = os.environ.get("CLI_HUB", "http://127.0.0.1:8722").rstrip("/") + "/event"
 
 
 def g(d, *path):
@@ -29,13 +28,8 @@ def main():
         d = json.load(sys.stdin)
     except Exception:
         d = {}
-    # dump latest raw JSON so we can confirm the real schema
-    try:
-        with open(DEBUG_RAW, "w") as f:
-            json.dump(d, f, indent=2)
-    except Exception:
-        pass
-
+    if not isinstance(d, dict):
+        d = {}
     session = d.get("session_id", "default")
     cost = g(d, "cost", "total_cost_usd")
     ctx = g(d, "context_window", "used_percentage")

@@ -8,10 +8,11 @@ Reads the hook JSON on stdin, POSTs a compact event to the local hub.
 Always exits 0 (never blocks Claude Code).
 """
 import json
+import os
 import sys
 import urllib.request
 
-HUB = "http://127.0.0.1:8722/event"
+HUB = os.environ.get("CLI_HUB", "http://127.0.0.1:8722").rstrip("/") + "/event"
 
 
 def main():
@@ -20,17 +21,14 @@ def main():
         data = json.load(sys.stdin)
     except Exception:
         data = {}
+    if not isinstance(data, dict):
+        data = {}
     payload = {"cli": "claude", "session": data.get("session_id", "default"), "type": typ}
     if typ == "prompt":
-        title = (data.get("prompt") or "").strip().replace("\n", " ")
+        prompt = data.get("prompt")
+        title = prompt.strip().replace("\n", " ") if isinstance(prompt, str) else ""
         if title:
             payload["title"] = title[:60]
-    if typ == "stop":   # capture raw payload to learn the cancel-vs-complete signal
-        try:
-            with open("/tmp/claude_stop_raw.jsonl", "a") as fdbg:
-                fdbg.write(json.dumps(data) + "\n")
-        except Exception:
-            pass
     try:
         req = urllib.request.Request(
             HUB, data=json.dumps(payload).encode(),
