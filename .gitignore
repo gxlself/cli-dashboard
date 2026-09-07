@@ -4,3 +4,5 @@ acli/
 __pycache__/
 *.pyc
 /tmp/
+.DS_Store
+docs/公众号文章.md
