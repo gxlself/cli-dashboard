@@ -74,19 +74,33 @@ def g(d, *path):
         d = d.get(k)
     return d
 
+def rate_limit_percent(d, window):
+    for field in ("used_percentage", "used_percent"):
+        value = g(d, "rate_limits", window, field)
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= value <= 100:
+            return round(value)
+    return None
+
+def format_usage(d):
+    parts = []
+    fh = rate_limit_percent(d, "five_hour")
+    wk = rate_limit_percent(d, "seven_day")
+    if fh is not None: parts.append("5h %d%%" % fh)
+    if wk is not None: parts.append("week %d%%" % wk)
+    return "  ".join(parts)
+
 def main():
     try:
         d = json.load(sys.stdin)
     except Exception:
         d = {}
     session = d.get("session_id", "default")
-    fh  = g(d, "rate_limits", "five_hour",  "used_percentage")
-    ctx = g(d, "context_window", "used_percentage")
     sname = d.get("session_name") or ""
-    parts = []
-    if fh  is not None: parts.append("5h %d%%" % round(fh))
-    if ctx is not None: parts.append("ctx %d%%" % round(ctx))
-    usage = "  ".join(parts)
+    usage = format_usage(d)
     if usage or sname:
         payload = {"cli": "claude", "session": session, "type": "usage"}
         if usage:  payload["usage"] = usage

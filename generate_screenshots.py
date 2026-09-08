@@ -339,7 +339,7 @@ def screen_channel(name="Codex", status="running", windows=1, usage="", task="se
 # ── screens ───────────────────────────────────────────────────────────────────
 
 def screen_working():
-    return screen_channel(usage="5h 42%  ctx 17%", task="refine dashboard layout")
+    return screen_channel(usage="5h 42%  week 61%", task="refine dashboard layout")
 
 def screen_idle():
     return screen_channel(status="idle", windows=0, task="awaiting input", frame=5)
@@ -359,7 +359,7 @@ def screen_done():
 
 def screen_multi():
     """Multiple sessions — grid of mini pets."""
-    return screen_channel("Claude", windows=8, view=0, usage="5h 71%  ctx 22%",
+    return screen_channel("Claude", windows=8, view=0, usage="5h 71%  week 84%",
                           task="run regression tests",
                           pets=["running", "done", "idle", "running", "idle", "idle", "idle", "idle"])
 

@@ -2,7 +2,7 @@
 """Claude Code statusLine -> CLI hub bridge (the only source of cost/quota).
 
 settings.json statusLine.command:  python3 claude_statusline.py
-Reads the rich statusline JSON on stdin, POSTs usage (5h / weekly / cost / ctx)
+Reads the rich statusline JSON on stdin, POSTs usage (5h / weekly)
 to the hub, and prints a short status string for the terminal.
 
 Usage refreshes update presence and quota, never the assistant's running state.
@@ -23,6 +23,30 @@ def g(d, *path):
     return d
 
 
+def rate_limit_percent(d, window):
+    """Read the Claude Code rate-limit percentage across schema variants."""
+    for field in ("used_percentage", "used_percent"):
+        value = g(d, "rate_limits", window, field)
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= value <= 100:
+            return round(value)
+    return None
+
+
+def format_usage(d):
+    parts = []
+    fh = rate_limit_percent(d, "five_hour")
+    wk = rate_limit_percent(d, "seven_day")
+    if fh is not None:
+        parts.append("5h %d%%" % fh)
+    if wk is not None:
+        parts.append("week %d%%" % wk)
+    return "  ".join(parts)
+
+
 def main():
     try:
         d = json.load(sys.stdin)
@@ -31,18 +55,7 @@ def main():
     if not isinstance(d, dict):
         d = {}
     session = d.get("session_id", "default")
-    cost = g(d, "cost", "total_cost_usd")
-    ctx = g(d, "context_window", "used_percentage")
-    fh = g(d, "rate_limits", "five_hour", "used_percentage")
-    wk = g(d, "rate_limits", "seven_day", "used_percentage")
-
-    # bottom line shows only 5h quota + context usage (per user preference)
-    parts = []
-    if fh is not None:
-        parts.append("5h %d%%" % round(fh))
-    if ctx is not None:
-        parts.append("ctx %d%%" % round(ctx))
-    usage = "  ".join(parts)
+    usage = format_usage(d)
 
     sname = d.get("session_name") or ""   # Claude's auto-generated elegant title
     if usage or sname:

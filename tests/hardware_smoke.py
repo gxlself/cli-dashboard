@@ -49,7 +49,7 @@ def main():
 
             codex = state["channels"][1]
             codex.update(windows=1, status="running", pets=["running"],
-                         usage="5h 42%  ctx 17%",
+                         usage="5h 42%  week 61%",
                          tasks=["\u4f18\u5316\u4eea\u8868\u76d8\u5e03\u5c40\u4e0e\u4e2d\u6587\u4efb\u52a1\u6807\u9898" * 4])
             board.send(state)
             first = snap("working")

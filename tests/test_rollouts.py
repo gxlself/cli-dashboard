@@ -262,13 +262,13 @@ class LifecycleHubTests(HubFixture, unittest.TestCase):
 
     def test_session_start_and_usage_only_do_not_run(self):
         hub.handle_event({"cli": "claude", "session": "one", "type": "start"})
-        hub.handle_event({"cli": "claude", "session": "one", "type": "usage", "usage": "ctx 5%"})
+        hub.handle_event({"cli": "claude", "session": "one", "type": "usage", "usage": "week 5%"})
         state = hub.build_state()["channels"][0]
         self.assertEqual(state["status"], "idle")
         self.assertEqual(state["pets"], ["idle"])
 
     def test_usage_without_lifecycle_does_not_claim_idle(self):
-        hub.handle_event({"cli": "claude", "session": "one", "type": "usage", "usage": "ctx 5%"})
+        hub.handle_event({"cli": "claude", "session": "one", "type": "usage", "usage": "week 5%"})
         state = hub.build_state()["channels"][0]
         self.assertEqual(state["status"], "unknown")
         self.assertEqual(state["pets"], ["unknown"])
